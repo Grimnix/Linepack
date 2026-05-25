@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Linepack Calculator — Peng-Robinson EOS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><text y=%2226%22 font-size=%2226%22>🔵</text></svg>"/>
+  <!-- Tabler Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css"/>
+  <!-- React 18 -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel standalone (JSX transform) -->
+  <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{font-size:14px}
+    body{
+      background:#f1f5f9;
+      color:#0f172a;
+      font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+      min-height:100vh;
+      padding:24px 16px 48px;
+    }
+    #root{
+      max-width:800px;
+      margin:0 auto;
+      background:#fff;
+      border-radius:16px;
+      padding:28px 28px 36px;
+      box-shadow:0 1px 3px rgba(0,0,0,.08),0 8px 32px rgba(0,0,0,.06);
+    }
+    /* ── inputs ── */
+    input[type=number],input[type=text]{
+      border:1px solid #e2e8f0;
+      border-radius:8px;
+      padding:7px 10px;
+      font-size:13px;
+      font-family:inherit;
+      outline:none;
+      background:#fff;
+      color:#0f172a;
+      width:100%;
+      transition:border-color .15s,box-shadow .15s;
+    }
+    input[type=number]:focus,input[type=text]:focus{
+      border-color:#0e7490;
+      box-shadow:0 0 0 3px rgba(14,116,144,.12);
+    }
+    /* hide number spinners */
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+    input[type=number]{-moz-appearance:textfield}
+    select{
+      border:1px solid #e2e8f0;
+      border-radius:8px;
+      padding:7px 28px 7px 9px;
+      font-size:13px;
+      font-family:inherit;
+      outline:none;
+      background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%2394a3b8' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E") no-repeat right 6px center;
+      -webkit-appearance:none;
+      appearance:none;
+      color:#0f172a;
+      cursor:pointer;
+      width:auto;
+    }
+    select:focus{border-color:#0e7490;box-shadow:0 0 0 3px rgba(14,116,144,.12)}
+    /* ── misc ── */
+    button{font-family:inherit;cursor:pointer}
+    h2,h3,p{margin:0}
+    sub{font-size:.75em;vertical-align:baseline;position:relative;bottom:-.25em}
+    strong{font-weight:700}
+    em{font-style:italic}
+    /* loading */
+    #loading{
+      display:flex;align-items:center;justify-content:center;
+      height:200px;font-size:14px;color:#64748b;gap:8px;
+    }
+    /* footer */
+    .lp-footer{
+      max-width:800px;margin:16px auto 0;
+      text-align:center;font-size:11px;color:#94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"><div id="loading"><span>⏳</span> กำลังโหลด Linepack Calculator...</div></div>
+  <div class="lp-footer">
+    Linepack Calculator &mdash; Peng-Robinson EOS (1976) &middot; Standing (1977) &middot; AGA &middot;
+    Developed for pipeline gas inventory estimation &middot;
+    <a href="https://doi.org/10.1021/i160057a011" target="_blank" style="color:#0e7490;text-decoration:none">PR-EOS ref</a>
+  </div>
+
+  <script type="text/babel" data-presets="react">
+const { useState, useCallback } = React;
+
+
+// ============================================================
+// PHYSICS ENGINE — Peng-Robinson EOS (1976)
+// ============================================================
+function prEOS(Ppr, Tpr, omega) {
+  // Peng-Robinson equation of state for Z-factor
+  // Ref: Peng & Robinson (1976), Ind. Eng. Chem. Fundam. 15(1), 59–64
+  if (Tpr <= 0.1) Tpr = 0.1;
+  if (Ppr <= 0.001) return 1.0;
+  const kappa = 0.37464 + 1.54226*omega - 0.26992*omega*omega;
+  const sqrtTr = Math.sqrt(Math.max(Tpr, 0.01));
+  const alpha = Math.pow(1.0 + kappa*(1.0 - sqrtTr), 2);
+  const A = 0.45724 * alpha * Ppr / (Tpr * Tpr);
+  const B = 0.07780 * Ppr / Tpr;
+  // Cubic: Z^3 - (1-B)Z^2 + (A-3B^2-2B)Z - (AB-B^2-B^3) = 0
+  const f  = (Z) => Z*Z*Z - (1-B)*Z*Z + (A-3*B*B-2*B)*Z - (A*B-B*B-B*B*B);
+  const df = (Z) => 3*Z*Z - 2*(1-B)*Z + (A-3*B*B-2*B);
+  let Z = Math.max(1.0, B + 0.1);
+  for (let i = 0; i < 200; i++) {
+    const fv = f(Z), dfv = df(Z);
+    if (Math.abs(dfv) < 1e-15) break;
+    const dZ = -fv / dfv;
+    Z += dZ;
+    if (Z <= B) Z = B + 0.001;
+    if (Math.abs(dZ) < 1e-10) break;
+  }
+  return Math.max(Z, B + 0.001);
+}
+
+function pseudoCritical(sg) {
+  // Standing (1977) correlation
+  const Tpc_R = 168 + 325*sg - 12.5*sg*sg;
+  const Ppc_psia = 677 + 15*sg - 37.5*sg*sg;
+  return { Tpc_K: Tpc_R*5/9, Ppc_kPa: Ppc_psia*6.89476 };
+}
+
+function toPkPa(v,u){
+  const a=101.325;
+  const m={barg:v*100+a,bara:v*100,kPag:v+a,kPaa:v,MPag:v*1000+a,MPaa:v*1000,psig:v*6.89476+a,psia:v*6.89476};
+  return m[u]!==undefined?m[u]:v;
+}
+function toTK(v,u){const m={C:v+273.15,F:(v-32)*5/9+273.15,K:v};return m[u]!==undefined?m[u]:v;}
+function toDm(v,u){const m={in:v*0.0254,mm:v/1000,m:v,cm:v/100};return m[u]!==undefined?m[u]:v;}
+function toLm(v,u){const m={km:v*1000,m:v,mile:v*1609.344};return m[u]!==undefined?m[u]:v;}
+function avgPressureAGA(P1,P2){
+  if(P1+P2<1e-9)return 0;
+  return(2/3)*(P1+P2-(P1*P2)/(P1+P2));
+}
+function fmt(n,d=2){return isNaN(n)||!isFinite(n)?"—":Number(n).toLocaleString("th-TH",{minimumFractionDigits:d,maximumFractionDigits:d});}
+function fmt3(n){return fmt(n,3);}
+
+let uid=0;
+// Defaults: OD=914 mm (~36"), wall=9.53 mm
+const newSeg=(n)=>({id:++uid,name:`Segment ${n}`,length:100,lUnit:"km",diam:914,dUnit:"mm",wall:9.53,wUnit:"mm"});
+
+// ============================================================
+// GAS ZONE DATA  (mol%) + acentric factors
+// ============================================================
+const COMP_MW   = {C1:16.043,C2:30.070,C3:44.097,C4:58.123,C5:72.150,C6:86.177,"C7+":100.204,CO2:44.010,N2:28.014};
+const COMP_HHV  = {C1:1011,  C2:1770,  C3:2516,  C4:3261,  C5:4009,  C6:4756,  "C7+":5503,   CO2:0,     N2:0};
+const COMP_FML  = {C1:"CH\u2084",C2:"C\u2082H\u2086",C3:"C\u2083H\u2088",C4:"C\u2084H\u2081\u2080",C5:"C\u2085H\u2081\u2082",C6:"C\u2086H\u2081\u2084","C7+":"C\u2087H\u2081\u2086\u207a",CO2:"CO\u2082",N2:"N\u2082"};
+const COMP_OMEGA= {C1:0.0115,C2:0.0995,C3:0.1523,C4:0.2002,C5:0.2515,C6:0.3013,"C7+":0.3498,CO2:0.2239,N2:0.0377};
+const COMP_KEYS = ["C1","C2","C3","C4","C5","C6","C7+","CO2","N2"];
+const HC_KEYS   = new Set(["C1","C2","C3","C4","C5","C6","C7+"]);
+
+function compSG(c){return COMP_KEYS.reduce((mw,k)=>mw+(c[k]/100)*(COMP_MW[k]||0),0)/28.97;}
+function compOmega(c){return COMP_KEYS.reduce((a,k)=>a+(c[k]/100)*(COMP_OMEGA[k]||0),0);}
+function sgToOmega(sg){return Math.max(0.008,0.035+0.12*(sg-0.55));}
+function compWI(c){const hhv=COMP_KEYS.reduce((h,k)=>h+(c[k]/100)*(COMP_HHV[k]||0),0);return hhv/Math.sqrt(compSG(c));}
+function compMW(c){return COMP_KEYS.reduce((mw,k)=>mw+(c[k]/100)*(COMP_MW[k]||0),0);}
+
+const GAS_ZONES = [
+  {
+    id:"east13", label:"Onshore East\u00a0#1\u20133", wiTarget:1300,
+    col:{hue:"#0891b2",light:"#ecfeff",border:"#a5f3fc",dot:"#06b6d4",text:"#0e7490",dark:"#164e63"},
+    comp:{C1:76.50,C2:8.20,C3:4.10,C4:1.50,C5:0.48,C6:0.18,"C7+":0.09,CO2:7.80,N2:1.15},
+  },
+  {
+    id:"east4",  label:"Onshore East\u00a0#4", wiTarget:1340,
+    col:{hue:"#059669",light:"#f0fdf4",border:"#86efac",dot:"#22c55e",text:"#16a34a",dark:"#14532d"},
+    comp:{C1:74.20,C2:9.50,C3:5.80,C4:2.10,C5:0.65,C6:0.25,"C7+":0.12,CO2:6.00,N2:1.38},
+  },
+  {
+    id:"east5",  label:"Onshore East\u00a0#5", wiTarget:1400,
+    col:{hue:"#d97706",light:"#fffbeb",border:"#fde68a",dot:"#f59e0b",text:"#b45309",dark:"#78350f"},
+    comp:{C1:71.00,C2:11.00,C3:7.50,C4:3.00,C5:0.85,C6:0.35,"C7+":0.18,CO2:4.50,N2:1.62},
+  },
+  {
+    id:"west",   label:"Onshore West", wiTarget:1080,
+    col:{hue:"#2563eb",light:"#eff6ff",border:"#bfdbfe",dot:"#60a5fa",text:"#1d4ed8",dark:"#1e3a8a"},
+    comp:{C1:77.00,C2:5.20,C3:1.60,C4:0.38,C5:0.09,C6:0.04,"C7+":0.02,CO2:13.50,N2:2.17},
+  },
+];
+
+// ============================================================
+// THEME TOKENS per section
+// ============================================================
+const THEMES={
+  pipe: {hue:"#0e7490",light:"#ecfeff",border:"#a5f3fc",icon:"#0891b2",dot:"#06b6d4",label:"#164e63"},
+  cond: {hue:"#b45309",light:"#fffbeb",border:"#fcd34d",icon:"#d97706",dot:"#f59e0b",label:"#78350f"},
+  gas:  {hue:"#6d28d9",light:"#f5f3ff",border:"#c4b5fd",icon:"#7c3aed",dot:"#8b5cf6",label:"#3b0764"},
+  base: {hue:"#374151",light:"#f9fafb",border:"#d1d5db",icon:"#6b7280",dot:"#9ca3af",label:"#111827"},
+};
+
+// ============================================================
+// GLOBAL CSS
+// ============================================================
+const CSS=`
+@keyframes flowDot{0%{left:-10px;opacity:0}8%{opacity:.9}92%{opacity:.9}100%{left:calc(100% + 10px);opacity:0}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.pipe-dot{position:absolute;top:50%;transform:translateY(-50%);width:6px;height:6px;border-radius:50%;opacity:0;pointer-events:none}
+.fade-up {animation:fadeUp .3s ease both}
+.fade-up-1{animation:fadeUp .3s .07s ease both}
+.fade-up-2{animation:fadeUp .3s .14s ease both}
+.fade-up-3{animation:fadeUp .3s .21s ease both}
+.calc-btn{transition:filter .15s,transform .1s}
+.calc-btn:hover{filter:brightness(1.07);transform:translateY(-1px)}
+.calc-btn:active{transform:translateY(0)}
+.seg-del:hover{opacity:1!important}
+.add-seg:hover{opacity:.8!important}
+.zone-card{transition:box-shadow .18s,transform .18s}
+.zone-card:hover{transform:translateY(-1px)}
+.dot-grid{background-image:radial-gradient(circle,currentColor 1px,transparent 1px);background-size:14px 14px}
+.diag-stripe{background-image:repeating-linear-gradient(-45deg,transparent,transparent 4px,currentColor 4px,currentColor 5px)}
+.bar-cell{height:6px;border-radius:3px;transition:width .5s ease}
+`;
+
+// ============================================================
+// SECTION CARD
+// ============================================================
+function SectionCard({themeKey,icon,title,tag,step,children,defaultOpen=true}){
+  const[open,setOpen]=useState(defaultOpen);
+  const th=THEMES[themeKey];
+  return(
+    <div style={{marginBottom:".75rem",borderRadius:"12px",overflow:"hidden",border:`1px solid ${th.border}`,background:"#ffffff"}}>
+      <div className="dot-grid" style={{height:"4px",background:th.hue,color:"rgba(255,255,255,.15)"}}/>
+      <button onClick={()=>setOpen(o=>!o)} style={{display:"flex",width:"100%",background:"none",border:"none",cursor:"pointer",padding:".875rem 1.125rem",alignItems:"center",justifyContent:"space-between",borderBottom:open?`1px solid ${th.border}`:"none",transition:"border-color .2s"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+          <div style={{width:"24px",height:"24px",borderRadius:"50%",background:th.light,border:`1.5px solid ${th.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"11px",fontWeight:700,color:th.label,flexShrink:0}}>{step}</div>
+          <i className={`ti ${icon}`} style={{fontSize:"15px",color:th.icon}} aria-hidden="true"/>
+          <span style={{fontSize:"13px",fontWeight:600,color:"#0f172a",letterSpacing:"-.01em"}}>{title}</span>
+          {tag&&<span style={{fontSize:"10px",padding:"1px 8px",background:th.light,border:`1px solid ${th.border}`,borderRadius:"20px",color:th.label,fontWeight:500}}>{tag}</span>}
+        </div>
+        <i className="ti ti-chevron-down" style={{fontSize:"14px",color:"#94a3b8",transition:"transform .22s ease",transform:open?"rotate(180deg)":"rotate(0deg)"}} aria-hidden="true"/>
+      </button>
+      <div style={{overflow:"hidden",maxHeight:open?"5000px":"0",transition:"max-height .3s ease,opacity .22s ease",opacity:open?1:0}}>
+        <div style={{padding:"1rem 1.125rem 1.125rem",background:open?th.light:"transparent",backgroundImage:open?`radial-gradient(circle at 96% 10%,${th.border}55 0px,transparent 55%)`:"none",transition:"background .25s"}}>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// WI SCALE
+// ============================================================
+const WI_MIN=1000,WI_MAX=1500;
+function WIScale({zones,selectedId}){
+  const pct=(wi)=>((wi-WI_MIN)/(WI_MAX-WI_MIN)*100).toFixed(2);
+  return(
+    <div style={{margin:"1rem 0 .75rem",padding:"0 4px"}}>
+      <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".09em",color:"#94a3b8",marginBottom:"6px"}}>Wobbe Index Scale (BTU/scf)</div>
+      <div style={{position:"relative",height:"6px",borderRadius:"3px",background:"#f8fafc",border:"0.5px solid #e2e8f0"}}>
+        {zones.map(z=>{
+          const sel=z.id===selectedId;
+          return(
+            <div key={z.id} style={{position:"absolute",left:`${pct(z.wiTarget)}%`,top:"50%",transform:"translate(-50%,-50%)",zIndex:sel?3:2}}>
+              <div style={{width:sel?"12px":"8px",height:sel?"12px":"8px",borderRadius:"50%",background:z.col.hue,border:sel?"3px solid #ffffff":"2px solid #ffffff",boxShadow:sel?`0 0 0 2px ${z.col.hue}`:"none",transition:"all .25s ease"}}/>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",marginTop:"3px"}}>
+        <span style={{fontSize:"9.5px",color:"#94a3b8"}}>1,000</span>
+        {zones.map(z=>(
+          <span key={z.id} style={{fontSize:"9.5px",fontWeight:z.id===selectedId?700:400,color:z.id===selectedId?z.col.text:"#94a3b8",transition:"color .2s"}}>
+            {z.wiTarget.toLocaleString()}
+          </span>
+        ))}
+        <span style={{fontSize:"9.5px",color:"#94a3b8"}}>1,500</span>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ZONE SELECTOR CARD
+// ============================================================
+function ZoneCard({zone,selected,onSelect}){
+  const c=zone.col;
+  const sg=compSG(zone.comp);
+  return(
+    <div className="zone-card" onClick={()=>onSelect(zone.id)} style={{cursor:"pointer",borderRadius:"10px",border:selected?`2px solid ${c.hue}`:`1px solid ${c.border}`,background:selected?c.light:"#ffffff",padding:selected?"11px 13px":"12px 13px",transition:"all .2s ease",boxShadow:selected?`0 0 0 3px ${c.hue}22`:"none",position:"relative",overflow:"hidden"}}>
+      <div style={{position:"absolute",top:0,left:0,right:0,height:"3px",background:c.hue,opacity:selected?1:.5,transition:"opacity .2s"}}/>
+      <div style={{fontSize:"11px",fontWeight:700,color:selected?c.dark:"#64748b",marginBottom:"8px",lineHeight:1.3,marginTop:"2px",letterSpacing:"-.01em"}}>{zone.label}</div>
+      <div style={{display:"flex",alignItems:"baseline",gap:"3px",marginBottom:"4px"}}>
+        <span style={{fontSize:"22px",fontWeight:700,fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",color:selected?c.hue:"#0f172a",letterSpacing:"-.03em",lineHeight:1}}>{zone.wiTarget.toLocaleString()}</span>
+      </div>
+      <div style={{fontSize:"9.5px",color:c.text,fontWeight:600,textTransform:"uppercase",letterSpacing:".08em",marginBottom:"8px"}}>BTU/scf (WI)</div>
+      <div style={{display:"inline-flex",alignItems:"center",gap:"4px",padding:"2px 8px",borderRadius:"20px",background:selected?c.hue:"#f8fafc",border:`1px solid ${selected?c.hue:c.border}`}}>
+        <span style={{fontSize:"10px",fontWeight:600,color:selected?"#fff":c.text,fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace"}}>SG {sg.toFixed(3)}</span>
+      </div>
+      {selected&&(
+        <div style={{position:"absolute",top:"8px",right:"8px",width:"16px",height:"16px",borderRadius:"50%",background:c.hue,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <i className="ti ti-check" style={{fontSize:"10px",color:"#fff"}} aria-hidden="true"/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// COMPOSITION TABLE
+// ============================================================
+function CompositionTable({zone}){
+  const c=zone.col;
+  const comp=zone.comp;
+  const sg=compSG(comp);
+  const wi=compWI(comp);
+  const mw=compMW(comp);
+  const om=compOmega(comp);
+  const total=COMP_KEYS.reduce((a,k)=>a+comp[k],0);
+  const maxVal=Math.max(...Object.values(comp));
+  const hcTotal=["C1","C2","C3","C4","C5","C6","C7+"].reduce((a,k)=>a+(comp[k]||0),0);
+  const barColor=(k)=>HC_KEYS.has(k)?c.hue:k==="CO2"?"#e05252":"#9ca3af";
+  return(
+    <div style={{marginTop:".875rem",animation:"fadeUp .3s ease both"}}>
+      <div style={{display:"flex",gap:"6px",flexWrap:"wrap",marginBottom:"1rem"}}>
+        {[
+          {label:"Wobbe Index",val:`${wi.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,",")} BTU/scf`,col:c},
+          {label:"Mol. Weight",val:`${mw.toFixed(3)} g/mol`,col:null},
+          {label:"Spec. Gravity",val:`${sg.toFixed(4)}`,col:null},
+          {label:"Acentric \u03c9",val:`${om.toFixed(4)}`,col:null},
+          {label:"HC Total",val:`${hcTotal.toFixed(2)} mol%`,col:null},
+        ].map(({label,val,col})=>(
+          <div key={label} style={{padding:"5px 12px",borderRadius:"20px",background:col?col.light:"#f8fafc",border:`1px solid ${col?col.border:"#e2e8f0"}`}}>
+            <div style={{fontSize:"9.5px",fontWeight:700,textTransform:"uppercase",letterSpacing:".07em",color:col?col.text:"#94a3b8",marginBottom:"1px"}}>{label}</div>
+            <div style={{fontSize:"12px",fontWeight:700,fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",color:col?col.dark:"#0f172a"}}>{val}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{borderRadius:"10px",overflow:"hidden",border:`1px solid ${c.border}`}}>
+        <div style={{display:"grid",gridTemplateColumns:"56px 80px 1fr 64px",gap:"0",padding:"6px 12px",background:c.hue}}>
+          {["Component","Formula","Composition (mol%)","mol%"].map((h,i)=>(
+            <div key={h} style={{fontSize:"9.5px",fontWeight:700,textTransform:"uppercase",letterSpacing:".07em",color:"rgba(255,255,255,.85)",textAlign:i===3?"right":"left"}}>{h}</div>
+          ))}
+        </div>
+        <div style={{padding:"4px 12px 2px",background:c.light,borderBottom:`1px solid ${c.border}`}}>
+          <span style={{fontSize:"9px",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",color:c.text}}>\u25cf Hydrocarbons</span>
+        </div>
+        {["C1","C2","C3","C4","C5","C6","C7+"].map((k,i)=>{
+          const v=comp[k]||0;
+          const pct=(v/maxVal*100);
+          return(
+            <div key={k} style={{display:"grid",gridTemplateColumns:"56px 80px 1fr 64px",gap:"0",padding:"6px 12px",background:i%2===0?"#ffffff":c.light+"66",borderBottom:`0.5px solid ${c.border}55`,alignItems:"center"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                <div style={{width:"6px",height:"6px",borderRadius:"50%",background:c.hue,flexShrink:0,opacity:.7}}/>
+                <span style={{fontSize:"12px",fontWeight:700,color:"#0f172a",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace"}}>{k}</span>
+              </div>
+              <div style={{fontSize:"11px",color:"#64748b"}}>{COMP_FML[k]}</div>
+              <div style={{display:"flex",alignItems:"center",gap:"6px",paddingRight:"8px"}}>
+                <div style={{flex:1,height:"5px",borderRadius:"3px",background:`${c.border}55`}}>
+                  <div className="bar-cell" style={{width:`${pct}%`,background:c.hue}}/>
+                </div>
+                <span style={{fontSize:"9.5px",color:"#94a3b8",minWidth:"28px",textAlign:"right"}}>{pct.toFixed(1)}%</span>
+              </div>
+              <div style={{fontSize:"12px",fontWeight:600,fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",color:"#0f172a",textAlign:"right"}}>{v.toFixed(2)}</div>
+            </div>
+          );
+        })}
+        <div style={{padding:"4px 12px 2px",background:"#f8fafc",borderTop:`1px solid #e2e8f0`,borderBottom:`0.5px solid #e2e8f0`}}>
+          <span style={{fontSize:"9px",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",color:"#94a3b8"}}>\u25cf Inerts</span>
+        </div>
+        {["CO2","N2"].map((k,i)=>{
+          const v=comp[k]||0;
+          const pct=(v/maxVal*100);
+          const col=k==="CO2"?"#e05252":"#9ca3af";
+          const bgCol=k==="CO2"?"#fef2f2":"#ffffff";
+          return(
+            <div key={k} style={{display:"grid",gridTemplateColumns:"56px 80px 1fr 64px",gap:"0",padding:"6px 12px",background:i%2===0?bgCol:"#f8fafc",borderBottom:i===0?`0.5px solid #e2e8f0`:"none",alignItems:"center"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                <div style={{width:"6px",height:"6px",borderRadius:"50%",background:col,flexShrink:0,opacity:.8}}/>
+                <span style={{fontSize:"12px",fontWeight:700,color:"#0f172a",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace"}}>{k}</span>
+              </div>
+              <div style={{fontSize:"11px",color:"#64748b"}}>{COMP_FML[k]}</div>
+              <div style={{display:"flex",alignItems:"center",gap:"6px",paddingRight:"8px"}}>
+                <div style={{flex:1,height:"5px",borderRadius:"3px",background:"#f8fafc"}}>
+                  <div className="bar-cell" style={{width:`${pct}%`,background:col}}/>
+                </div>
+                <span style={{fontSize:"9.5px",color:"#94a3b8",minWidth:"28px",textAlign:"right"}}>{pct.toFixed(1)}%</span>
+              </div>
+              <div style={{fontSize:"12px",fontWeight:600,fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",color:"#0f172a",textAlign:"right"}}>{v.toFixed(2)}</div>
+            </div>
+          );
+        })}
+        <div style={{display:"grid",gridTemplateColumns:"56px 80px 1fr 64px",gap:"0",padding:"6px 12px",background:c.light,borderTop:`1.5px solid ${c.border}`}}>
+          <div style={{gridColumn:"1/3"}}><span style={{fontSize:"11px",fontWeight:700,textTransform:"uppercase",letterSpacing:".06em",color:c.text}}>Total</span></div>
+          <div/>
+          <div style={{fontSize:"12px",fontWeight:700,fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",color:c.dark,textAlign:"right"}}>{total.toFixed(2)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PIPELINE VIZ
+// ============================================================
+function PipelineViz({segs,pIn,pOut,pUnit}){
+  const P1=parseFloat(pIn)||0,P2=parseFloat(pOut)||0;
+  const hasFlow=P1>P2+0.01;
+  const diff=Math.max(0,P1-P2);
+  const dur=hasFlow?Math.max(1.0,5-diff*0.005):99;
+  const totalLen=segs.reduce((a,s)=>a+(parseFloat(s.length)||0),0);
+  const dots=[0,0.14,0.28,0.42,0.56,0.70,0.84];
+  const th=THEMES.pipe;
+  return(
+    <div style={{marginBottom:"1.25rem"}}>
+      <div style={{display:"flex",alignItems:"center",gap:"10px",marginBottom:"8px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"6px",padding:"4px 12px",background:th.light,border:`1px solid ${th.border}`,borderRadius:"20px",flexShrink:0}}>
+          <div style={{width:"7px",height:"7px",borderRadius:"50%",background:th.dot}}/>
+          <span style={{fontSize:"12px",fontWeight:600,color:th.label,fontVariantNumeric:"tabular-nums"}}>{pIn||"\u2014"} <span style={{opacity:.7}}>{pUnit}</span></span>
+        </div>
+        <div style={{flex:1,position:"relative",height:"30px",borderRadius:"15px",overflow:"hidden",border:`1px solid ${th.border}`,background:"#ffffff"}}>
+          {hasFlow&&<div style={{position:"absolute",inset:0,background:`linear-gradient(to right,${th.light} 0%,transparent 100%)`,opacity:.8}}/>}
+          {segs.length>1&&(()=>{
+            let cum=0;
+            return segs.map((s,i)=>{
+              const pct=totalLen>0?(cum/totalLen)*100:(i/segs.length)*100;
+              const w=totalLen>0?((parseFloat(s.length)||0)/totalLen)*100:100/segs.length;
+              cum+=(parseFloat(s.length)||0);
+              return(
+                <div key={s.id}>
+                  {i>0&&<div style={{position:"absolute",top:"15%",bottom:"15%",left:`${pct}%`,width:"1px",background:th.border}}/>}
+                  <div style={{position:"absolute",top:0,bottom:0,left:`${pct}%`,width:`${w}%`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    <span style={{fontSize:"9.5px",color:th.label,opacity:.7,maxWidth:"90%",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{s.name}</span>
+                  </div>
+                </div>
+              );
+            });
+          })()}
+          {segs.length===1&&!hasFlow&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:"11px",color:"#94a3b8"}}>P\u2081 = P\u2082 \u2014 static</span></div>}
+          {hasFlow&&dots.map((off,i)=>(
+            <div key={i} className="pipe-dot" style={{background:th.dot,animation:`flowDot ${dur.toFixed(2)}s ${(off*dur).toFixed(2)}s infinite linear`}}/>
+          ))}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"6px",padding:"4px 12px",background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:"20px",flexShrink:0}}>
+          <span style={{fontSize:"12px",fontWeight:500,color:"#64748b",fontVariantNumeric:"tabular-nums"}}>{pOut||"\u2014"} <span style={{opacity:.6}}>{pUnit}</span></span>
+          <div style={{width:"7px",height:"7px",borderRadius:"50%",border:"1.5px solid #cbd5e1"}}/>
+        </div>
+      </div>
+      {(P1>0||P2>0)&&<div style={{height:"3px",borderRadius:"2px",background:"#f8fafc",overflow:"hidden"}}><div style={{height:"100%",width:`${Math.min(100,(diff/Math.max(P1,1))*100).toFixed(1)}%`,background:`linear-gradient(to right,${th.dot},${th.border})`,borderRadius:"2px",transition:"width .4s ease"}}/></div>}
+      <div style={{display:"flex",justifyContent:"space-between",marginTop:"3px"}}>
+        <span style={{fontSize:"10px",color:"#94a3b8"}}>\u0394P = {fmt(Math.max(0,P1-P2),2)} {pUnit}</span>
+        {hasFlow&&<span style={{fontSize:"10px",color:th.icon,fontWeight:500}}>\u25cf flowing</span>}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// MAIN APP
+// ============================================================
+function App(){
+  const[segs,setSegs]=useState([newSeg(1)]);
+  const[pIn,setPIn]=useState("870");
+  const[pOut,setPOut]=useState("580");
+  const[pUnit,setPUnit]=useState("psig");
+  const[temp,setTemp]=useState("86");
+  const[tUnit,setTUnit]=useState("F");
+  const[sg,setSg]=useState("0.6507");
+  const[basePkPa,setBasePkPa]=useState("101.325");
+  const[baseTC,setBaseTC]=useState("15");
+  const[avgM,setAvgM]=useState("aga");
+  const[results,setResults]=useState(null);
+  const[error,setError]=useState("");
+  const[formulaOpen,setFormulaOpen]=useState(false);
+  const[selectedZone,setSelectedZone]=useState("east13");
+
+  const handleZoneSelect=(id)=>{
+    if(id===selectedZone){setSelectedZone(null);return;}
+    setSelectedZone(id);
+    const z=GAS_ZONES.find(z=>z.id===id);
+    if(z)setSg(compSG(z.comp).toFixed(4));
+  };
+
+  const addSeg=()=>setSegs(p=>[...p,newSeg(p.length+1)]);
+  const remSeg=id=>setSegs(p=>p.filter(s=>s.id!==id));
+  const updSeg=(id,k,v)=>setSegs(p=>p.map(s=>s.id===id?{...s,[k]:v}:s));
+
+  const calculate=useCallback(()=>{
+    try{
+      setError("");
+      const P1=toPkPa(parseFloat(pIn),pUnit),P2=toPkPa(parseFloat(pOut),pUnit);
+      const T_K=toTK(parseFloat(temp),tUnit);
+      const Tb_K=parseFloat(baseTC)+273.15,Pb_kPa=parseFloat(basePkPa);
+      const SG=parseFloat(sg);
+      if(isNaN(P1)||isNaN(P2)||isNaN(T_K)||isNaN(SG)||SG<=0||T_K<=0||P1<=0)throw new Error("กรุณาตรวจสอบค่า Input ให้ครบถ้วน");
+      if(P1<P2)throw new Error("ความดันขาเข้าต้องมากกว่าหรือเท่ากับความดันขาออก");
+      const{Tpc_K,Ppc_kPa}=pseudoCritical(SG);
+      const Pavg=avgM==="aga"?avgPressureAGA(P1,P2):(P1+P2)/2;
+      const Ppr=Pavg/Ppc_kPa,Tpr=T_K/Tpc_K;
+      // Peng-Robinson: get acentric factor from composition (if zone selected) or estimate from SG
+      const zone=GAS_ZONES.find(z=>z.id===selectedZone);
+      const omega=zone?compOmega(zone.comp):sgToOmega(SG);
+      const Z_op=prEOS(Ppr,Tpr,omega);
+      const Z_base=prEOS(Pb_kPa/Ppc_kPa,Tb_K/Tpc_K,omega);
+      const segR=segs.map(s=>{
+        const Di_m=toDm(parseFloat(s.diam),s.dUnit)-2*toDm(parseFloat(s.wall)||0,s.wUnit);
+        const L_m=toLm(parseFloat(s.length),s.lUnit);
+        if(Di_m<=0)throw new Error(`Segment "${s.name}": ID ต้องมากกว่า 0`);
+        const V=(Math.PI/4)*Di_m*Di_m*L_m;
+        const LP=V*(Pavg/Pb_kPa)*(Tb_K/T_K)*(Z_base/Z_op);
+        return{...s,Di_m,L_m,V_m3:V,LP_Sm3:LP};
+      });
+      const totV=segR.reduce((a,s)=>a+s.V_m3,0);
+      const totLP=segR.reduce((a,s)=>a+s.LP_Sm3,0);
+      const M_gas=SG*28.97;
+      const rho_std=(Pb_kPa*1000*M_gas/1000)/(Z_base*8.314*Tb_K);
+      const totTonnes=totLP*rho_std/1000;
+      const LP_MMscf=totLP/28316.85;
+      setResults({P1,P2,Pavg,T_K,Tpc_K,Ppc_kPa,Ppr,Tpr,Z_op,Z_base,omega,segR,totV,totLP,LP_MMscf,totTonnes,rho_std,Pb_kPa,Tb_K,SG,avgM,zoneName:zone?zone.label:null});
+    }catch(e){setError(e.message);setResults(null);}
+  },[segs,pIn,pOut,pUnit,temp,tUnit,sg,basePkPa,baseTC,avgM,selectedZone]);
+
+  const thP=THEMES.pipe,thC=THEMES.cond,thG=THEMES.gas;
+  const curZone=GAS_ZONES.find(z=>z.id===selectedZone);
+
+  return(
+    <div style={{fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",padding:"1rem 0",maxWidth:"740px"}}>
+      <style>{CSS}</style>
+
+      {/* HEADER */}
+      <div style={{marginBottom:"1.375rem",paddingBottom:"1.125rem",borderBottom:"1px solid #e2e8f0"}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:"12px"}}>
+          <div>
+            <h2 style={{fontSize:"18px",fontWeight:700,color:"#0f172a",margin:"0 0 5px",letterSpacing:"-.02em",display:"flex",alignItems:"center",gap:"9px"}}>
+              <span style={{width:"30px",height:"30px",borderRadius:"8px",background:thP.hue,display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                <i className="ti ti-database" style={{fontSize:"15px",color:"#fff"}} aria-hidden="true"/>
+              </span>
+              Linepack Calculator
+            </h2>
+            <p style={{fontSize:"12.5px",color:"#64748b",margin:"0 0 6px",lineHeight:1.6}}>
+              คำนวณปริมาณก๊าซสะสมในระบบท่อ
+            </p>
+            <div style={{display:"flex",gap:"5px",flexWrap:"wrap",marginBottom:"6px"}}>
+              {[
+                {label:"Z-factor: Peng-Robinson EOS (1976)",col:"#0e7490",bg:"#ecfeff",border:"#a5f3fc"},
+                {label:"Tpc/Ppc: Standing (1977)",col:"#6d28d9",bg:"#f5f3ff",border:"#c4b5fd"},
+                {label:"P\u2090\u1d65\u1d72: AGA Logarithmic",col:"#b45309",bg:"#fffbeb",border:"#fde68a"},
+              ].map(({label,col,bg,border})=>(
+                <span key={label} style={{fontSize:"10px",fontWeight:600,padding:"2px 8px",borderRadius:"20px",background:bg,border:"1px solid "+border,color:col,whiteSpace:"nowrap"}}>{label}</span>
+              ))}
+            </div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"3px",flexShrink:0}}>
+            {[{dot:thP.dot,label:"Pipeline"},{dot:thC.dot,label:"Conditions"},{dot:thG.dot,label:"Gas"}].map(({dot,label})=>(
+              <div key={label} style={{display:"flex",alignItems:"center",gap:"5px"}}>
+                <div style={{width:"6px",height:"6px",borderRadius:"50%",background:dot}}/>
+                <span style={{fontSize:"10px",color:"#94a3b8"}}>{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <PipelineViz segs={segs} pIn={pIn} pOut={pOut} pUnit={pUnit}/>
+
+      {/* ── STEP 1: PIPELINE ── */}
+      <SectionCard themeKey="pipe" icon="ti-git-branch" title="ข้อมูลท่อส่งก๊าซ" step="1" defaultOpen={true}>
+        {segs.map((s,i)=>(
+          <div key={s.id}>
+            {segs.length>1&&(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"8px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"7px"}}>
+                  <div style={{width:"20px",height:"20px",borderRadius:"50%",background:thP.hue,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"10px",fontWeight:700,color:"#fff"}}>{i+1}</div>
+                  <input type="text" value={s.name} onChange={e=>updSeg(s.id,"name",e.target.value)} style={{fontSize:"12px",fontWeight:600,color:"#0f172a",background:"none",border:"none",borderBottom:`1.5px solid ${thP.border}`,borderRadius:0,padding:"1px 4px",outline:"none",width:"140px"}}/>
+                </div>
+                <button className="seg-del" onClick={()=>remSeg(s.id)} aria-label="ลบ" style={{background:"none",border:`1px solid ${thP.border}`,borderRadius:"6px",cursor:"pointer",color:thP.icon,fontSize:"14px",width:"28px",height:"28px",display:"flex",alignItems:"center",justifyContent:"center",opacity:.6,transition:"opacity .15s"}}>
+                  <i className="ti ti-x" aria-hidden="true"/>
+                </button>
+              </div>
+            )}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"10px"}}>
+              {[
+                {label:"ความยาว",key:"length",unit:"lUnit",opts:["km","m","mile"]},
+                {label:"OD (mm default)",key:"diam",unit:"dUnit",opts:["mm","in","m","cm"]},
+                {label:"Wall Thickness (mm default)",key:"wall",unit:"wUnit",opts:["mm","in","m"],step:"0.01"},
+              ].map(({label,key,unit,opts,step})=>(
+                <div key={key}>
+                  <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",color:"#64748b",marginBottom:"5px"}}>{label}</div>
+                  <div style={{display:"flex",gap:"4px"}}>
+                    <input type="number" value={s[key]} min="0" step={step||"any"} onChange={e=>updSeg(s.id,key,e.target.value)} style={{flex:1,minWidth:0}}/>
+                    <select value={s[unit]} onChange={e=>updSeg(s.id,unit,e.target.value)} style={{width:"54px"}}>
+                      {opts.map(o=><option key={o}>{o}</option>)}
+                    </select>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {i<segs.length-1&&<div style={{borderTop:`1px dashed ${thP.border}`,margin:".875rem 0"}}/>}
+          </div>
+        ))}
+        <button className="add-seg" onClick={addSeg} style={{marginTop:".75rem",fontSize:"12px",fontWeight:500,background:thP.hue,color:"#fff",border:"none",borderRadius:"8px",padding:"6px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:"6px",opacity:.85,transition:"opacity .15s"}}>
+          <i className="ti ti-plus" style={{fontSize:"13px"}} aria-hidden="true"/>\u0e40\u0e1e\u0e34\u0e48\u0e21 Segment
+        </button>
+      </SectionCard>
+
+      {/* ── STEP 2: CONDITIONS ── */}
+      <SectionCard themeKey="cond" icon="ti-gauge" title="สภาวะการทำงาน" step="2" defaultOpen={true}>
+        <div style={{marginBottom:"12px"}}>
+          <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",color:thC.icon,marginBottom:"8px",display:"flex",alignItems:"center",gap:"6px"}}>
+            <div style={{flex:1,height:"1px",background:thC.border}}/><span>ความดัน</span><div style={{flex:1,height:"1px",background:thC.border}}/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:"10px",alignItems:"flex-end"}}>
+            <div>
+              <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",color:"#64748b",marginBottom:"5px"}}>Inlet (P\u2081)</div>
+              <input type="number" value={pIn} onChange={e=>setPIn(e.target.value)} style={{width:"100%",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",color:"#64748b",marginBottom:"5px"}}>Outlet (P\u2082)</div>
+              <input type="number" value={pOut} onChange={e=>setPOut(e.target.value)} style={{width:"100%",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",color:"#64748b",marginBottom:"5px"}}>หน่วย</div>
+              <select value={pUnit} onChange={e=>setPUnit(e.target.value)}>{["psig","psia","barg","bara","kPag","kPaa","MPag","MPaa"].map(o=><option key={o}>{o}</option>)}</select>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",color:thC.icon,marginBottom:"8px",display:"flex",alignItems:"center",gap:"6px"}}>
+            <div style={{flex:1,height:"1px",background:thC.border}}/><span>อุณหภูมิ & วิธีคำนวณ</span><div style={{flex:1,height:"1px",background:thC.border}}/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:"10px",alignItems:"flex-end"}}>
+            <div>
+              <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",color:"#64748b",marginBottom:"5px"}}>Gas Temperature</div>
+              <input type="number" value={temp} onChange={e=>setTemp(e.target.value)} style={{width:"100%",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",color:"#64748b",marginBottom:"5px"}}>หน่วย</div>
+              <select value={tUnit} onChange={e=>setTUnit(e.target.value)}>{["F","C","K"].map(o=><option key={o}>{o}</option>)}</select>
+            </div>
+            <div>
+              <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",color:"#64748b",marginBottom:"5px"}}>P_avg method</div>
+              <select value={avgM} onChange={e=>setAvgM(e.target.value)} style={{width:"100%",boxSizing:"border-box"}}>
+                <option value="aga">AGA (Logarithmic)</option>
+                <option value="simple">Simple Average</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
+      {/* ── STEP 3: GAS PROPERTIES ── */}
+      <SectionCard themeKey="gas" icon="ti-atom" title="คุณสมบัติก๊าซ" step="3" defaultOpen={true}>
+        <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",color:thG.icon,marginBottom:"10px",display:"flex",alignItems:"center",gap:"6px"}}>
+          <div style={{flex:1,height:"1px",background:thG.border}}/><span>เลือกย่านก๊าซ (Gas Zone)</span><div style={{flex:1,height:"1px",background:thG.border}}/>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"8px",marginBottom:"4px"}}>
+          {GAS_ZONES.map(z=>(
+            <ZoneCard key={z.id} zone={z} selected={selectedZone===z.id} onSelect={handleZoneSelect}/>
+          ))}
+        </div>
+        <WIScale zones={GAS_ZONES} selectedId={selectedZone}/>
+        {curZone&&<CompositionTable zone={curZone}/>}
+        <div style={{marginTop:"1rem",paddingTop:"1rem",borderTop:`1px dashed ${thG.border}`}}>
+          <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",color:thG.icon,marginBottom:"8px",display:"flex",alignItems:"center",gap:"6px"}}>
+            <div style={{flex:1,height:"1px",background:thG.border}}/><span>Specific Gravity (SG) ที่ใช้ในการคำนวณ</span><div style={{flex:1,height:"1px",background:thG.border}}/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px",alignItems:"center"}}>
+            <div>
+              <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",color:"#64748b",marginBottom:"5px"}}>
+                SG {curZone?"(คำนวณจาก composition)":"(กรอกเอง)"}
+              </div>
+              <input type="number" value={sg} step="0.0001" min="0.4" max="1.5"
+                onChange={e=>{setSg(e.target.value);setSelectedZone(null);}}
+                style={{width:"100%",boxSizing:"border-box",borderColor:curZone?curZone.col.border:undefined,background:curZone?curZone.col.light:undefined}}
+              />
+            </div>
+            <div style={{padding:"10px 12px",borderRadius:"8px",background:"#ffffff",border:`1px solid ${curZone?curZone.col.border:"#e2e8f0"}`}}>
+              {curZone?(
+                <>
+                  <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".07em",color:curZone.col.text,marginBottom:"5px"}}>ย่านที่เลือก</div>
+                  <div style={{fontSize:"13px",fontWeight:700,color:curZone.col.dark}}>{curZone.label}</div>
+                  <div style={{fontSize:"11px",color:"#64748b",marginTop:"2px"}}>SG={compSG(curZone.comp).toFixed(4)} \u00b7 \u03c9={compOmega(curZone.comp).toFixed(4)} \u00b7 WI\u2248{curZone.wiTarget.toLocaleString()} BTU/scf</div>
+                </>
+              ):(
+                <>
+                  <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".07em",color:"#94a3b8",marginBottom:"5px"}}>Custom mode</div>
+                  <div style={{fontSize:"11px",color:"#64748b"}}>ก๊าซธรรมชาติ: 0.55\u20130.75<br/>\u03c9 ประมาณจาก SG อัตโนมัติ</div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
+      {/* ── STEP 4: BASE CONDITIONS ── */}
+      <SectionCard themeKey="base" icon="ti-settings" title="Base Conditions" step="4" tag="optional" defaultOpen={false}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px",marginBottom:"10px"}}>
+          <div>
+            <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",color:"#64748b",marginBottom:"5px"}}>Base pressure</div>
+            <input type="number" value={basePkPa} step="0.001" onChange={e=>setBasePkPa(e.target.value)} style={{width:"100%",boxSizing:"border-box"}}/>
+            <div style={{fontSize:"10.5px",color:"#94a3b8",marginTop:"3px"}}>kPa absolute</div>
+          </div>
+          <div>
+            <div style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",color:"#64748b",marginBottom:"5px"}}>Base temperature</div>
+            <input type="number" value={baseTC} onChange={e=>setBaseTC(e.target.value)} style={{width:"100%",boxSizing:"border-box"}}/>
+            <div style={{fontSize:"10.5px",color:"#94a3b8",marginTop:"3px"}}>\u00b0C</div>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <span style={{fontSize:"11.5px",color:"#94a3b8"}}>ค่าปัจจุบัน: {basePkPa} kPa abs \u00b7 {baseTC} \u00b0C</span>
+          <button onClick={()=>{setBasePkPa("101.325");setBaseTC("15");}} style={{fontSize:"11.5px",padding:"5px 12px",background:"none",border:"1px solid #cbd5e1",borderRadius:"8px",cursor:"pointer",color:"#64748b",whiteSpace:"nowrap"}}>
+            <i className="ti ti-refresh" style={{marginRight:"4px",fontSize:"12px",verticalAlign:"-1px"}} aria-hidden="true"/>Reset ISO 13443
+          </button>
+        </div>
+      </SectionCard>
+
+      {/* ERROR */}
+      {error&&(
+        <div style={{padding:".75rem 1rem",marginBottom:".75rem",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:"10px",color:"#dc2626",fontSize:"13px",display:"flex",alignItems:"center",gap:"8px"}}>
+          <i className="ti ti-alert-circle" style={{fontSize:"15px",flexShrink:0}} aria-hidden="true"/>{error}
+        </div>
+      )}
+
+      {/* CALCULATE */}
+      <button className="calc-btn" onClick={calculate} style={{width:"100%",padding:".875rem",fontSize:"14.5px",fontWeight:600,background:thP.hue,color:"#fff",border:"none",borderRadius:"10px",cursor:"pointer",marginBottom:"1.25rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"9px",letterSpacing:"-.01em"}}>
+        <i className="ti ti-calculator" style={{fontSize:"17px"}} aria-hidden="true"/>คำนวณ Linepack
+      </button>
+
+      {/* RESULTS */}
+      {results&&(
+        <div key={String(results.totLP)}>
+
+          {/* ── HERO: MMscf (primary) + Pipe Volume (alongside) ── */}
+          <div className="fade-up" style={{borderRadius:"12px",overflow:"hidden",marginBottom:".75rem",border:`1px solid ${thP.border}`}}>
+            <div className="diag-stripe" style={{height:"5px",background:thP.hue,color:"rgba(255,255,255,.2)"}}/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr auto",background:`linear-gradient(135deg,${thP.light} 0%,#ffffff 70%)`}}>
+              {/* MMscf — PRIMARY */}
+              <div style={{padding:"1.25rem 1.5rem",borderRight:`1px solid ${thP.border}`}}>
+                <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".12em",color:thP.icon,marginBottom:"8px",display:"flex",alignItems:"center",gap:"6px"}}>
+                  <i className="ti ti-wave-sine" style={{fontSize:"12px"}} aria-hidden="true"/>Linepack (Primary)
+                </div>
+                <div style={{display:"flex",alignItems:"baseline",gap:"8px",marginBottom:"4px"}}>
+                  <span style={{fontSize:"44px",fontWeight:700,color:thP.label,fontVariantNumeric:"tabular-nums",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",letterSpacing:"-.03em",lineHeight:1}}>
+                    {fmt(results.LP_MMscf,4)}
+                  </span>
+                  <span style={{fontSize:"20px",color:thP.icon,fontWeight:600}}>MMscf</span>
+                </div>
+                <div style={{fontSize:"12px",color:thP.icon,opacity:.75,fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace"}}>{fmt(results.totLP,0)} Sm\u00b3</div>
+                {results.zoneName&&<div style={{marginTop:"6px",fontSize:"11px",color:thP.icon,opacity:.7}}>\u22af {results.zoneName}</div>}
+              </div>
+              {/* Pipe Volume — ALONGSIDE */}
+              <div style={{padding:"1.25rem 1.25rem",minWidth:"160px",display:"flex",flexDirection:"column",justifyContent:"center"}}>
+                <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",color:"#64748b",marginBottom:"8px",display:"flex",alignItems:"center",gap:"5px"}}>
+                  <i className="ti ti-cylinder" style={{fontSize:"12px"}} aria-hidden="true"/>Pipe Volume
+                </div>
+                <div style={{display:"flex",alignItems:"baseline",gap:"5px",marginBottom:"3px"}}>
+                  <span style={{fontSize:"26px",fontWeight:700,fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",color:"#0f172a",letterSpacing:"-.02em",lineHeight:1}}>{fmt(results.totV,2)}</span>
+                  <span style={{fontSize:"13px",fontWeight:500,color:"#64748b"}}>m\u00b3</span>
+                </div>
+                <div style={{fontSize:"11px",color:"#94a3b8"}}>geometric (pipe)</div>
+                <div style={{marginTop:"10px",paddingTop:"10px",borderTop:`0.5px solid ${thP.border}`}}>
+                  <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"3px",textTransform:"uppercase",letterSpacing:".07em",fontWeight:600}}>Mass</div>
+                  <div style={{fontSize:"14px",fontWeight:600,fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",color:"#0f172a"}}>{fmt(results.totTonnes,2)}</div>
+                  <div style={{fontSize:"10.5px",color:"#94a3b8"}}>metric tonnes</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Z-factor & pressure details */}
+          <div className="fade-up-1" style={{borderRadius:"12px",overflow:"hidden",border:"0.5px solid #e2e8f0",marginBottom:".75rem"}}>
+            <div style={{padding:".75rem 1.125rem",background:"#f8fafc",borderBottom:"0.5px solid #e2e8f0",display:"flex",alignItems:"center",gap:"7px"}}>
+              <i className="ti ti-chart-dots" style={{fontSize:"13px",color:"#64748b"}} aria-hidden="true"/>
+              <span style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".09em",color:"#64748b"}}>ผลการคำนวณ</span>
+            </div>
+            <div style={{padding:"1rem 1.125rem",background:"#ffffff"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"20px"}}>
+                <div>
+                  <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".09em",color:thC.icon,marginBottom:"8px",display:"flex",alignItems:"center",gap:"5px"}}>
+                    <div style={{width:"8px",height:"8px",borderRadius:"2px",background:thC.dot}}/>ความดัน
+                  </div>
+                  <table style={{width:"100%",fontSize:"12px",borderCollapse:"collapse"}}>
+                    {[
+                      ["P\u2081 (inlet)",fmt(results.P1,2),"kPa abs"],
+                      ["P\u2082 (outlet)",fmt(results.P2,2),"kPa abs"],
+                      ["P_avg",fmt(results.Pavg,2),"kPa abs"],
+                      ["P_avg",fmt(results.Pavg/6.89476,2),"psia"],
+                    ].map(([k,v,u],idx)=>(
+                      <tr key={idx} style={{borderBottom:"0.5px solid #e2e8f0"}}>
+                        <td style={{padding:"4px 0",color:"#64748b"}}>{k}</td>
+                        <td style={{padding:"4px 0",textAlign:"right",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",fontWeight:600}}>{v}</td>
+                        <td style={{padding:"4px 0",paddingLeft:"6px",color:"#94a3b8",fontSize:"10.5px"}}>{u}</td>
+                      </tr>
+                    ))}
+                  </table>
+                </div>
+                <div>
+                  <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".09em",color:thG.icon,marginBottom:"8px",display:"flex",alignItems:"center",gap:"5px"}}>
+                    <div style={{width:"8px",height:"8px",borderRadius:"2px",background:thG.dot}}/>PR-EOS & Gas Properties
+                  </div>
+                  <table style={{width:"100%",fontSize:"12px",borderCollapse:"collapse"}}>
+                    {[
+                      ["Tpc",fmt(results.Tpc_K-273.15,1),"\u00b0C"],
+                      ["Ppc",fmt(results.Ppc_kPa/100,2),"bar abs"],
+                      ["Tpr",fmt(results.Tpr,4),"\u2014"],
+                      ["Ppr",fmt(results.Ppr,4),"\u2014"],
+                      ["Acentric \u03c9",fmt(results.omega,4),"\u2014"],
+                      ["Z (operating)",fmt(results.Z_op,5),"\u2014"],
+                      ["Z (base cond.)",fmt(results.Z_base,5),"\u2014"],
+                      ["\u03c1 @ std",fmt(results.rho_std,4),"kg/Sm\u00b3"],
+                    ].map(([k,v,u],idx)=>(
+                      <tr key={idx} style={{borderBottom:"0.5px solid #e2e8f0"}}>
+                        <td style={{padding:"4px 0",color:"#64748b"}}>{k}</td>
+                        <td style={{padding:"4px 0",textAlign:"right",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",fontWeight:600}}>{v}</td>
+                        <td style={{padding:"4px 0",paddingLeft:"6px",color:"#94a3b8",fontSize:"10.5px"}}>{u}</td>
+                      </tr>
+                    ))}
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Segment table */}
+          {results.segR.length>1&&(
+            <div className="fade-up-2" style={{borderRadius:"12px",overflow:"hidden",border:"0.5px solid #e2e8f0",marginBottom:".75rem"}}>
+              <div style={{padding:".75rem 1.125rem",background:"#f8fafc",borderBottom:"0.5px solid #e2e8f0",display:"flex",alignItems:"center",gap:"7px"}}>
+                <i className="ti ti-list" style={{fontSize:"13px",color:"#64748b"}} aria-hidden="true"/>
+                <span style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".09em",color:"#64748b"}}>Linepack แยกตาม Segment</span>
+              </div>
+              <div style={{overflowX:"auto",background:"#ffffff"}}>
+                <table style={{width:"100%",fontSize:"12px",borderCollapse:"collapse"}}>
+                  <thead>
+                    <tr style={{borderBottom:"0.5px solid #cbd5e1"}}>
+                      {["Segment","L (km)","ID (m)","Vol. (m\u00b3)","MMscf","Sm\u00b3","%"].map(h=>(
+                        <th key={h} style={{padding:"6px 10px",textAlign:h==="Segment"?"left":"right",color:"#64748b",fontWeight:600,fontSize:"10px",textTransform:"uppercase",letterSpacing:".07em"}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {results.segR.map((s,i)=>(
+                      <tr key={s.id} style={{borderBottom:"0.5px solid #e2e8f0",background:i%2===1?"#f8fafc":"transparent"}}>
+                        <td style={{padding:"6px 10px",fontWeight:500}}>
+                          <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+                            <div style={{width:"16px",height:"16px",borderRadius:"50%",background:thP.hue,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"9px",fontWeight:700,color:"#fff",flexShrink:0}}>{i+1}</div>
+                            {s.name}
+                          </div>
+                        </td>
+                        <td style={{padding:"6px 10px",textAlign:"right",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace"}}>{fmt(s.L_m/1000,2)}</td>
+                        <td style={{padding:"6px 10px",textAlign:"right",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",color:"#64748b"}}>{fmt(s.Di_m,4)}</td>
+                        <td style={{padding:"6px 10px",textAlign:"right",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace"}}>{fmt(s.V_m3,1)}</td>
+                        <td style={{padding:"6px 10px",textAlign:"right",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",fontWeight:700,color:thP.label}}>{fmt(s.LP_Sm3/28316.85,4)}</td>
+                        <td style={{padding:"6px 10px",textAlign:"right",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace"}}>{fmt(s.LP_Sm3,0)}</td>
+                        <td style={{padding:"6px 10px",textAlign:"right"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:"5px",justifyContent:"flex-end"}}>
+                            <div style={{width:"32px",height:"4px",borderRadius:"2px",background:"#f8fafc",overflow:"hidden"}}>
+                              <div style={{height:"100%",width:`${(s.LP_Sm3/results.totLP*100).toFixed(1)}%`,background:thP.dot,borderRadius:"2px"}}/>
+                            </div>
+                            <span style={{color:"#64748b",fontSize:"11px"}}>{fmt(s.LP_Sm3/results.totLP*100,1)}%</span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    <tr style={{background:"#f8fafc",borderTop:`1px solid ${thP.border}`}}>
+                      <td colSpan={4} style={{padding:"6px 10px",fontWeight:600,color:"#64748b",fontSize:"11px"}}>รวมทั้งหมด</td>
+                      <td style={{padding:"6px 10px",textAlign:"right",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",fontWeight:700,color:thP.label}}>{fmt(results.LP_MMscf,4)}</td>
+                      <td style={{padding:"6px 10px",textAlign:"right",fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",fontWeight:700}}>{fmt(results.totLP,0)}</td>
+                      <td style={{padding:"6px 10px",textAlign:"right",fontWeight:600,fontSize:"11px"}}>100%</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Formula collapsible */}
+          <div style={{borderRadius:"10px",overflow:"hidden",border:"0.5px solid #e2e8f0"}}>
+            <button onClick={()=>setFormulaOpen(o=>!o)} style={{display:"flex",width:"100%",background:"#f8fafc",border:"none",cursor:"pointer",padding:".75rem 1rem",alignItems:"center",justifyContent:"space-between"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+                <i className="ti ti-math-function" style={{fontSize:"13px",color:"#64748b"}} aria-hidden="true"/>
+                <span style={{fontSize:"11px",fontWeight:600,textTransform:"uppercase",letterSpacing:".08em",color:"#64748b"}}>สูตรที่ใช้คำนวณ & References</span>
+              </div>
+              <i className="ti ti-chevron-down" style={{fontSize:"13px",color:"#94a3b8",transition:"transform .22s",transform:formulaOpen?"rotate(180deg)":"rotate(0deg)"}} aria-hidden="true"/>
+            </button>
+            <div style={{overflow:"hidden",maxHeight:formulaOpen?"700px":"0",transition:"max-height .35s ease,opacity .22s ease",opacity:formulaOpen?1:0}}>
+              <div style={{padding:".875rem 1rem",fontSize:"12px",color:"#64748b",lineHeight:1.9,background:"#ffffff"}}>
+                <div style={{fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",marginBottom:"5px"}}>LP = V<sub>pipe</sub> \u00d7 (P<sub>avg</sub>/P<sub>base</sub>) \u00d7 (T<sub>base</sub>/T<sub>avg</sub>) \u00d7 (Z<sub>base</sub>/Z<sub>avg</sub>)</div>
+                <div style={{fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",marginBottom:"5px"}}>V<sub>pipe</sub> = (\u03c0/4) \u00d7 D<sub>i</sub>\u00b2 \u00d7 L</div>
+                <div style={{fontFamily:"ui-monospace,SFMono-Regular,'SF Mono',Consolas,monospace",marginBottom:"12px",fontSize:"11px",color:"#94a3b8"}}>
+                  Z from PR-EOS: Z\u00b3 \u2212 (1\u2212B)Z\u00b2 + (A\u22123B\u00b2\u22122B)Z \u2212 (AB\u2212B\u00b2\u2212B\u00b3) = 0
+                </div>
+                <div style={{borderTop:"0.5px solid #e2e8f0",paddingTop:"10px",marginBottom:"10px"}}>
+                  <div style={{fontSize:"10px",fontWeight:700,textTransform:"uppercase",letterSpacing:".08em",color:"#94a3b8",marginBottom:"8px"}}>Methods & References</div>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:"11.5px"}}>
+                    {[
+                      {method:"Z-factor (EoS)",model:"Peng-Robinson EOS",ref:"Peng & Robinson (1976)",col:"#0e7490",bg:"#ecfeff",border:"#a5f3fc"},
+                      {method:"Pseudo-critical",model:"Standing correlation",ref:"Standing (1977)",col:"#6d28d9",bg:"#f5f3ff",border:"#c4b5fd"},
+                      {method:"Acentric factor \u03c9",model:results.zoneName?"Kay's mixing rule":"SG-based estimate",ref:results.zoneName?"Kay (1936)":"Approximate",col:"#374151",bg:"#f9fafb",border:"#d1d5db"},
+                      {method:"Average pressure",model:results.avgM==="aga"?"AGA logarithmic":"Simple arithmetic",ref:"AGA Report No.3",col:"#b45309",bg:"#fffbeb",border:"#fde68a"},
+                    ].map(({method,model,ref,col,bg,border})=>(
+                      <tr key={method} style={{borderBottom:"0.5px solid #e2e8f0"}}>
+                        <td style={{padding:"5px 0",color:"#64748b",width:"34%",verticalAlign:"top"}}>{method}</td>
+                        <td style={{padding:"5px 6px",verticalAlign:"top"}}>
+                          <span style={{display:"inline-block",padding:"1px 7px",borderRadius:"12px",background:bg,border:"1px solid "+border,color:col,fontWeight:600,fontSize:"11px"}}>{model}</span>
+                        </td>
+                        <td style={{padding:"5px 0",color:"#94a3b8",fontSize:"10.5px",textAlign:"right",verticalAlign:"top"}}>{ref}</td>
+                      </tr>
+                    ))}
+                  </table>
+                </div>
+                <div style={{fontSize:"11px",color:"#94a3b8",borderTop:"0.5px solid #e2e8f0",paddingTop:"8px"}}>
+                  Base: {fmt(results.Pb_kPa,3)} kPa abs \u00b7 {fmt(results.Tb_K-273.15,1)} \u00b0C \u00b7 \u03c9={fmt(results.omega,4)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+
+  </script>
+</body>
+</html>
